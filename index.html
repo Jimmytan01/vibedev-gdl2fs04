@@ -489,7 +489,8 @@
       const STORAGE_KEY = 'aquarium_livestock_log_v1';
       let state = [];
       let editingId = null;
-      const deleteConfirmTimers = {};
+      let armedDeleteId = null;
+      let armedDeleteTimer = null;
 
       // DOM References
       const summaryBar = document.getElementById('summaryBar');
@@ -550,22 +551,55 @@
         Deceased: { icon: '💀', label: 'Deceased', badgeClass: 'badge-health-deceased' }
       };
 
-      // Storage handling
+      // Timer and armed state handlers for Delete
+      function clearArmedDeleteTimer() {
+        if (armedDeleteTimer) {
+          clearTimeout(armedDeleteTimer);
+          armedDeleteTimer = null;
+        }
+      }
+
+      function disarmDelete() {
+        clearArmedDeleteTimer();
+        armedDeleteId = null;
+      }
+
+      function armDelete(id) {
+        clearArmedDeleteTimer();
+        armedDeleteId = id;
+        armedDeleteTimer = setTimeout(() => {
+          armedDeleteId = null;
+          armedDeleteTimer = null;
+          renderGrid(true);
+        }, 4000);
+        renderGrid(true);
+      }
+
+      // Storage handling with field type validation for notes
       function loadFromStorage() {
         try {
           const raw = localStorage.getItem(STORAGE_KEY);
           if (!raw) return [];
           const parsed = JSON.parse(raw);
           if (!Array.isArray(parsed)) return [];
-          return parsed.filter(item => {
-            return item &&
+          const validItems = [];
+          for (let i = 0; i < parsed.length; i++) {
+            const item = parsed[i];
+            if (
+              item &&
               typeof item.id === 'string' &&
               typeof item.name === 'string' && item.name.trim() !== '' &&
               typeof item.species === 'string' && item.species.trim() !== '' &&
               typeof item.dateAdded === 'string' &&
               ['top', 'mid', 'bottom', 'substrate'].includes(item.tankSection) &&
-              ['Healthy', 'Sick', 'Deceased'].includes(item.healthStatus);
-          });
+              ['Healthy', 'Sick', 'Deceased'].includes(item.healthStatus)
+            ) {
+              // Normalize notes field: ensure string fallback to ''
+              item.notes = (typeof item.notes === 'string') ? item.notes : '';
+              validItems.push(item);
+            }
+          }
+          return validItems;
         } catch (err) {
           console.warn('LocalStorage malformed, falling back to empty log.', err);
           return [];
@@ -610,7 +644,10 @@
         });
       }
 
-      function renderGrid() {
+      function renderGrid(isFromArm = false) {
+        if (!isFromArm) {
+          disarmDelete();
+        }
         updateSummary();
         const filtered = getFilteredState();
         cardGrid.innerHTML = '';
@@ -693,10 +730,24 @@
 
         const deleteBtn = document.createElement('button');
         deleteBtn.type = 'button';
-        deleteBtn.className = 'btn btn-danger btn-sm';
-        deleteBtn.innerHTML = '<span>🗑️</span> Delete';
         deleteBtn.setAttribute('aria-label', `Delete ${escapeHtml(item.name)}`);
-        deleteBtn.addEventListener('click', () => handleDeleteClick(item.id, deleteBtn));
+        
+        if (armedDeleteId === item.id) {
+          deleteBtn.className = 'btn btn-danger btn-sm btn-danger-confirm';
+          deleteBtn.innerHTML = '<span>⚠️</span> Confirm Delete?';
+          deleteBtn.addEventListener('click', () => {
+            disarmDelete();
+            state = state.filter(x => x.id !== item.id);
+            saveToStorage();
+            renderGrid();
+          });
+        } else {
+          deleteBtn.className = 'btn btn-danger btn-sm';
+          deleteBtn.innerHTML = '<span>🗑️</span> Delete';
+          deleteBtn.addEventListener('click', () => {
+            armDelete(item.id);
+          });
+        }
 
         footer.appendChild(editBtn);
         footer.appendChild(deleteBtn);
@@ -808,26 +859,6 @@
         });
 
         return form;
-      }
-
-      // Delete confirmation handling
-      function handleDeleteClick(id, btnElement) {
-        if (deleteConfirmTimers[id]) {
-          clearTimeout(deleteConfirmTimers[id]);
-          delete deleteConfirmTimers[id];
-
-          state = state.filter(item => item.id !== id);
-          saveToStorage();
-          renderGrid();
-        } else {
-          btnElement.classList.add('btn-danger-confirm');
-          btnElement.innerHTML = '<span>⚠️</span> Confirm Delete?';
-
-          deleteConfirmTimers[id] = setTimeout(() => {
-            delete deleteConfirmTimers[id];
-            renderGrid();
-          }, 4000);
-        }
       }
 
       // Form Add Handler with double-click guard
